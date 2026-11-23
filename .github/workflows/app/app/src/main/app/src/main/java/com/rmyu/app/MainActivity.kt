@@ -9,34 +9,41 @@ import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.widget.TextView
 
 class MainActivity : Activity() {
-    private lateinit var info: TextView
+    private var info: TextView? = null
     private val handler = Handler(Looper.getMainLooper())
 
     private val tick = object : Runnable {
         override fun run() {
-            val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            val mem = ActivityManager.MemoryInfo()
-            am.getMemoryInfo(mem)
-            val totalMb = mem.totalMem / (1024 * 1024)
-            val freeMb = mem.availMem / (1024 * 1024)
+            try {
+                val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                val mem = ActivityManager.MemoryInfo()
+                am.getMemoryInfo(mem)
+                val totalMb = mem.totalMem / (1024 * 1024)
+                val freeMb = mem.availMem / (1024 * 1024)
 
-            val bat: Intent? = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            val temp = (bat?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0
+                val bat: Intent? = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                val temp = (bat?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0
 
-            info.text = "rmyu\n\nRAM free: $freeMb MB\nRAM total: $totalMb MB\nBattery temp: $temp C"
-            handler.postDelayed(this, 1000)
+                info?.text = "rmyu\n\nRAM free: $freeMb MB\nRAM total: $totalMb MB\nBattery temp: $temp C"
+                handler.postDelayed(this, 1000)
+            } catch (e: Throwable) {
+                info?.text = "ERROR (tick):\n" + Log.getStackTraceString(e)
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        info = TextView(this)
-        info.textSize = 22f
-        info.setPadding(48, 96, 48, 48)
-        setContentView(info)
+        val tv = TextView(this)
+        tv.textSize = 14f
+        tv.setPadding(48, 96, 48, 48)
+        tv.text = "rmyu start ho raha hai..."
+        info = tv
+        setContentView(tv)
     }
 
     override fun onResume() {
