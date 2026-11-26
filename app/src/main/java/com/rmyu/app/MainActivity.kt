@@ -59,6 +59,23 @@ class MainActivity : Activity() {
         return out + err
     }
 
+    private fun calcFps(latency: String): String {
+        val lines = latency.trim().lines()
+        if (lines.size < 2) return "latency ka output khaali hai"
+        val times = ArrayList<Long>()
+        for (i in 1 until lines.size) {
+            val parts = lines[i].trim().split(Regex("\\s+"))
+            if (parts.size >= 3) {
+                val t = parts[1].toLongOrNull() ?: continue
+                if (t > 0 && t != Long.MAX_VALUE) times.add(t)
+            }
+        }
+        if (times.isEmpty()) return "koi frame time nahi mila"
+        val last = times.max()
+        val count = times.count { it > last - 1_000_000_000L }
+        return "FPS: $count"
+    }
+
     private val tick = object : Runnable {
         override fun run() {
             try {
@@ -152,12 +169,38 @@ class MainActivity : Activity() {
             }.start()
         }
 
+        val fpsBtn = Button(this)
+        fpsBtn.text = "FPS Test (6 sec baad)"
+        fpsBtn.setOnClickListener {
+            sTv.text = "6 second me Free Fire kholo aur game screen par raho. Phir 10 second baad rmyu me wapas aao."
+            Thread {
+                val result = try {
+                    Thread.sleep(6000)
+                    val list = runShell("dumpsys SurfaceFlinger --list")
+                    val matches = list.lines().filter { it.contains("freefire", true) }
+                    if (matches.isEmpty()) {
+                        "Free Fire ki layer nahi mili. Layers:\n" +
+                            list.lines().take(15).joinToString("\n")
+                    } else {
+                        val layer = (matches.firstOrNull { it.contains("SurfaceView") }
+                            ?: matches[0]).trim()
+                        val lat = runShell("dumpsys SurfaceFlinger --latency \"" + layer + "\"")
+                        "Layer: " + layer + "\n" + calcFps(lat)
+                    }
+                } catch (e: Throwable) {
+                    "ERROR (fps):\n" + Log.getStackTraceString(e)
+                }
+                runOnUiThread { sTv.text = "FPS result:\n" + result }
+            }.start()
+        }
+
         root.addView(tv)
         root.addView(startBtn)
         root.addView(stopBtn)
         root.addView(sTv)
         root.addView(permBtn)
         root.addView(testBtn)
+        root.addView(fpsBtn)
 
         val scroll = ScrollView(this)
         scroll.addView(root)
