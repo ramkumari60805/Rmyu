@@ -5,6 +5,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Bundle
@@ -14,11 +15,49 @@ import android.provider.Settings
 import android.util.Log
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import rikka.shizuku.Shizuku
 
 class MainActivity : Activity() {
     private var info: TextView? = null
+    private var shizukuInfo: TextView? = null
     private val handler = Handler(Looper.getMainLooper())
+
+    private val permListener =
+        Shizuku.OnRequestPermissionResultListener { _, _ ->
+            runOnUiThread { shizukuInfo?.text = shizukuStatus() }
+        }
+
+    private fun shizukuStatus(): String {
+        return try {
+            if (!Shizuku.pingBinder()) {
+                "Shizuku: NAHI chal raha"
+            } else if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+                "Shizuku: chal raha hai, permission mil gayi"
+            } else {
+                "Shizuku: chal raha hai, permission NAHI mili"
+            }
+        } catch (e: Throwable) {
+            "Shizuku error: " + e.message
+        }
+    }
+
+    private fun runShell(cmd: String): String {
+        val m = Shizuku::class.java.getDeclaredMethod(
+            "newProcess",
+            Array<String>::class.java,
+            Array<String>::class.java,
+            String::class.java
+        )
+        m.isAccessible = true
+        val args = arrayOf<Any?>(arrayOf("sh", "-c", cmd), null, null)
+        val p = m.invoke(null, *args) as Process
+        val out = p.inputStream.bufferedReader().readText()
+        val err = p.errorStream.bufferedReader().readText()
+        p.waitFor()
+        return out + err
+    }
 
     private val tick = object : Runnable {
         override fun run() {
@@ -80,19 +119,73 @@ class MainActivity : Activity() {
             }
         }
 
+        val sTv = TextView(this)
+        sTv.textSize = 16f
+        sTv.setPadding(0, 48, 0, 16)
+        sTv.text = shizukuStatus()
+        shizukuInfo = sTv
+
+        val permBtn = Button(this)
+        permBtn.text = "Shizuku Permission Maango"
+        permBtn.setOnClickListener {
+            try {
+                if (Shizuku.pingBinder()) {
+                    Shizuku.requestPermission(100)
+                }
+                sTv.text = shizukuStatus()
+            } catch (e: Throwable) {
+                sTv.text = "Shizuku error: " + e.message
+            }
+        }
+
+        val testBtn = Button(this)
+        testBtn.text = "Shizuku Test (id command)"
+        testBtn.setOnClickListener {
+            sTv.text = "Test chal raha hai..."
+            Thread {
+                val result = try {
+                    runShell("id")
+                } catch (e: Throwable) {
+                    "ERROR (test):\n" + Log.getStackTraceString(e)
+                }
+                runOnUiThread { sTv.text = "Test result:\n" + result }
+            }.start()
+        }
+
         root.addView(tv)
         root.addView(startBtn)
         root.addView(stopBtn)
-        setContentView(root)
+        root.addView(sTv)
+        root.addView(permBtn)
+        root.addView(testBtn)
+
+        val scroll = ScrollView(this)
+        scroll.addView(root)
+        setContentView(scroll)
+
+        try {
+            Shizuku.addRequestPermissionResultListener(permListener)
+        } catch (e: Throwable) {
+            sTv.text = "Shizuku error: " + e.message
+        }
     }
 
     override fun onResume() {
         super.onResume()
+        shizukuInfo?.text = shizukuStatus()
         handler.post(tick)
     }
 
     override fun onPause() {
         super.onPause()
         handler.removeCallbacks(tick)
+    }
+
+    override fun onDestroy() {
+        try {
+            Shizuku.removeRequestPermissionResultListener(permListener)
+        } catch (e: Throwable) {
+        }
+        super.onDestroy()
     }
 }
