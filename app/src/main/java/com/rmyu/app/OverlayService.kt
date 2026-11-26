@@ -16,6 +16,11 @@ import android.view.WindowManager
 import android.widget.TextView
 
 class OverlayService : Service() {
+    // Yahan se size aur position badal sakte ho
+    private val TEXT_SIZE = 16f   // text ka size, bada chahiye to 18 ya 20 karo
+    private val POS_X = 60        // LEFT edge se doori (waterfall ke liye)
+    private val POS_Y = 20        // NEECHE ke edge se doori, upar chahiye to 60 karo
+
     private var wm: WindowManager? = null
     private var box: TextView? = null
     private val handler = Handler(Looper.getMainLooper())
@@ -48,23 +53,21 @@ class OverlayService : Service() {
             val tv = TextView(this)
             tv.setTextColor(Color.WHITE)
             tv.setBackgroundColor(Color.TRANSPARENT)
-            tv.textSize = 11f
+            tv.textSize = TEXT_SIZE
             tv.setPadding(6, 2, 6, 2)
-            tv.setShadowLayer(5f, 0f, 0f, Color.BLACK)
+            tv.setShadowLayer(6f, 0f, 0f, Color.BLACK)
 
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT
             )
-            params.gravity = Gravity.TOP or Gravity.START
-            params.x = 0
-            params.y = 0
+            params.gravity = Gravity.BOTTOM or Gravity.START
+            params.x = POS_X
+            params.y = POS_Y
 
             wm?.addView(tv, params)
             box = tv
