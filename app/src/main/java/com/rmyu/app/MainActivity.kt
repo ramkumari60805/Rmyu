@@ -59,21 +59,15 @@ class MainActivity : Activity() {
         return out + err
     }
 
-    private fun calcFps(latency: String): String {
-        val lines = latency.trim().lines()
-        if (lines.size < 2) return "latency ka output khaali hai"
-        val times = ArrayList<Long>()
-        for (i in 1 until lines.size) {
-            val parts = lines[i].trim().split(Regex("\\s+"))
-            if (parts.size >= 3) {
-                val t = parts[1].toLongOrNull() ?: continue
-                if (t > 0 && t != Long.MAX_VALUE) times.add(t)
-            }
-        }
-        if (times.isEmpty()) return "koi frame time nahi mila"
-        val last = times.max()
-        val count = times.count { it > last - 1_000_000_000L }
-        return "FPS: $count"
+    // Abhi screen par kaunsa app khula hai, uska package naam nikalta hai
+    private fun foregroundPackage(): String? {
+        val w = runShell("dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'")
+        val re = Regex("u0 ([A-Za-z0-9_.]+)/")
+        val m = re.find(w)
+        if (m != null) return m.groupValues[1]
+        val a = runShell("dumpsys activity activities | grep -E 'topResumedActivity|ResumedActivity'")
+        val re2 = Regex(" ([A-Za-z0-9_.]+)/")
+        return re2.find(a)?.groupValues?.get(1)
     }
 
     private val tick = object : Runnable {
@@ -137,7 +131,7 @@ class MainActivity : Activity() {
         }
 
         val sTv = TextView(this)
-        sTv.textSize = 16f
+        sTv.textSize = 14f
         sTv.setPadding(0, 48, 0, 16)
         sTv.text = shizukuStatus()
         shizukuInfo = sTv
@@ -170,22 +164,49 @@ class MainActivity : Activity() {
         }
 
         val fpsBtn = Button(this)
-        fpsBtn.text = "FPS Test (6 sec baad)"
+        fpsBtn.text = "FPS Test (kisi bhi game par)"
         fpsBtn.setOnClickListener {
-            sTv.text = "6 second me Free Fire kholo aur game screen par raho. Phir 10 second baad rmyu me wapas aao."
+            sTv.text = "6 second me koi bhi game kholo aur game screen par 12 second raho. Phir rmyu me wapas aao."
             Thread {
                 val result = try {
                     Thread.sleep(6000)
-                    val list = runShell("dumpsys SurfaceFlinger --list")
-                    val matches = list.lines().filter { it.contains("freefire", true) }
-                    if (matches.isEmpty()) {
-                        "Free Fire ki layer nahi mili. Layers:\n" +
-                            list.lines().take(15).joinToString("\n")
+                    val pkg = foregroundPackage()
+                    if (pkg == null || pkg == packageName) {
+                        "Game ka package nahi mila (pkg = $pkg). Game screen par khade hokar dobara try karo."
                     } else {
-                        val layer = (matches.firstOrNull { it.contains("SurfaceView") }
-                            ?: matches[0]).trim()
-                        val lat = runShell("dumpsys SurfaceFlinger --latency \"" + layer + "\"")
-                        "Layer: " + layer + "\n" + calcFps(lat)
+                        val list = runShell("dumpsys SurfaceFlinger --list")
+                        val matches = list.lines().filter { it.contains(pkg) }
+                        if (matches.isEmpty()) {
+                            "Package: " + pkg + "\nIs package ki layer nahi mili. Layers:\n" +
+                                list.lines().take(15).joinToString("\n")
+                        } else {
+                            val layer = (matches.firstOrNull { it.contains("SurfaceView") }
+                                ?: matches[0]).trim()
+
+                            val lat = runShell("dumpsys SurfaceFlinger --latency \"" + layer + "\"")
+                            val latHead = lat.lines().take(4).joinToString("\n")
+
+                            runShell("dumpsys SurfaceFlinger --timestats -enable")
+                            runShell("dumpsys SurfaceFlinger --timestats -clear")
+                            Thread.sleep(2000)
+                            val ts = runShell("dumpsys SurfaceFlinger --timestats -dump")
+                            runShell("dumpsys SurfaceFlinger --timestats -disable")
+
+                            val tl = ts.lines()
+                            val idx = tl.indexOfFirst { it.contains(pkg) }
+                            val tsHead = if (idx < 0) {
+                                "timestats me ye package nahi mila. Pehli lines:\n" +
+                                    tl.take(8).joinToString("\n")
+                            } else {
+                                tl.subList(maxOf(0, idx - 1), minOf(tl.size, idx + 12))
+                                    .joinToString("\n")
+                            }
+
+                            "Package: " + pkg +
+                                "\nLayer: " + layer +
+                                "\n\nLATENCY (pehli 4 line):\n" + latHead +
+                                "\n\nTIMESTATS:\n" + tsHead
+                        }
                     }
                 } catch (e: Throwable) {
                     "ERROR (fps):\n" + Log.getStackTraceString(e)
