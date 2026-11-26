@@ -5,11 +5,15 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
+import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 
 class MainActivity : Activity() {
@@ -38,12 +42,48 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setPadding(48, 96, 48, 48)
+
         val tv = TextView(this)
-        tv.textSize = 14f
-        tv.setPadding(48, 96, 48, 48)
+        tv.textSize = 18f
         tv.text = "rmyu start ho raha hai..."
         info = tv
-        setContentView(tv)
+
+        val startBtn = Button(this)
+        startBtn.text = "Start Overlay"
+        startBtn.setOnClickListener {
+            try {
+                if (!Settings.canDrawOverlays(this)) {
+                    val i = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivity(i)
+                } else {
+                    startService(Intent(this, OverlayService::class.java))
+                }
+            } catch (e: Throwable) {
+                info?.text = "ERROR (start):\n" + Log.getStackTraceString(e)
+            }
+        }
+
+        val stopBtn = Button(this)
+        stopBtn.text = "Stop Overlay"
+        stopBtn.setOnClickListener {
+            try {
+                stopService(Intent(this, OverlayService::class.java))
+            } catch (e: Throwable) {
+                info?.text = "ERROR (stop):\n" + Log.getStackTraceString(e)
+            }
+        }
+
+        root.addView(tv)
+        root.addView(startBtn)
+        root.addView(stopBtn)
+        setContentView(root)
     }
 
     override fun onResume() {
