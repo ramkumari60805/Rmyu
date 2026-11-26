@@ -31,7 +31,7 @@ class OverlayService : Service() {
                 val bat: Intent? = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
                 val temp = (bat?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0
 
-                box?.text = "RAM free: $freeMb MB\nTemp: $temp C"
+                box?.text = "RAM $freeMb MB  |  $temp C"
             } catch (e: Throwable) {
                 box?.text = "ERR: " + e.message
             }
@@ -47,21 +47,24 @@ class OverlayService : Service() {
             wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
             val tv = TextView(this)
             tv.setTextColor(Color.WHITE)
-            tv.setBackgroundColor(Color.argb(170, 0, 0, 0))
-            tv.textSize = 12f
-            tv.setPadding(16, 8, 16, 8)
+            tv.setBackgroundColor(Color.TRANSPARENT)
+            tv.textSize = 11f
+            tv.setPadding(6, 2, 6, 2)
+            tv.setShadowLayer(5f, 0f, 0f, Color.BLACK)
 
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT
             )
             params.gravity = Gravity.TOP or Gravity.START
-            params.x = 20
-            params.y = 100
+            params.x = 0
+            params.y = 0
 
             wm?.addView(tv, params)
             box = tv
