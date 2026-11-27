@@ -86,18 +86,20 @@ class OverlayService : Service() {
         return result
     }
 
-    // FPS na bane to is app ke naam ki alag file me asli output likhta hai
+    // FPS na bane (ya 0 aaye) to is app ke naam ki alag file me do sample likhta hai
     private fun writeDebug(pkg: String) {
         val f = "/sdcard/Download/rmyu_dbg_" + pkg + ".txt"
         runShell("echo 'pkg " + pkg + "' > " + f)
+        runShell("echo '== SAMPLE 1' >> " + f)
+        runShell("dumpsys SurfaceFlinger --timestats -dump -maxlayers 200 | grep -F -A8 '" + pkg + "' | head -c 2500 >> " + f)
+        try {
+            Thread.sleep(3000)
+        } catch (e: InterruptedException) {
+        }
+        runShell("echo '== SAMPLE 2 (3 sec baad)' >> " + f)
+        runShell("dumpsys SurfaceFlinger --timestats -dump -maxlayers 200 | grep -F -A8 '" + pkg + "' | head -c 2500 >> " + f)
         runShell("echo '== layerName ki ginti' >> " + f)
         runShell("dumpsys SurfaceFlinger --timestats -dump -maxlayers 200 | grep -c layerName >> " + f)
-        runShell("echo '== layerName lines' >> " + f)
-        runShell("dumpsys SurfaceFlinger --timestats -dump -maxlayers 200 | grep -F layerName | head -c 2500 >> " + f)
-        runShell("echo '== is app ke aas-paas ka text' >> " + f)
-        runShell("dumpsys SurfaceFlinger --timestats -dump -maxlayers 200 | grep -F -A12 '" + pkg + "' | head -c 3000 >> " + f)
-        runShell("echo '== timestats shuru' >> " + f)
-        runShell("dumpsys SurfaceFlinger --timestats -dump | head -c 600 >> " + f)
     }
 
     private fun startWorker() {
@@ -150,7 +152,7 @@ class OverlayService : Service() {
                                         val fps = (best * 1_000_000_000L / (now - prevTimeNs)).toInt()
                                         fpsText = "FPS " + fps
                                         dbg = pkg + " (" + totals.size + " layer)"
-                                        gotFps = true
+                                        gotFps = fps > 0
                                     } else {
                                         dbg = pkg + " | naya layer, ruko"
                                     }
