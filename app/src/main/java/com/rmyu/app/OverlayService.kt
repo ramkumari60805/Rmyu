@@ -37,6 +37,10 @@ class OverlayService : Service() {
     private var prevTimeNs = 0L
     private var prevPkg: String? = null
 
+    private var gamePkgSeen: String? = null
+    private var gameSecs = 0
+    private var dumpedPkg: String? = null
+
     private fun runShell(cmd: String): String {
         val m = Shizuku::class.java.getDeclaredMethod(
             "newProcess",
@@ -78,6 +82,29 @@ class OverlayService : Service() {
             }
         }
         return result
+    }
+
+    // Phone ka asli output ek file me likhta hai (debug ke liye)
+    private fun writeDebug(pkg: String) {
+        val f = "/sdcard/Download/rmyu_debug.txt"
+        val ver = runShell("getprop ro.build.version.release").trim()
+        val model = runShell("getprop ro.product.model").trim()
+        runShell("echo 'android " + ver + " | " + model + " | pkg " + pkg + "' > " + f)
+        runShell("echo '== LIST (pehli 30 line)' >> " + f)
+        runShell("dumpsys SurfaceFlinger --list | head -30 >> " + f)
+        val list = runShell("dumpsys SurfaceFlinger --list")
+        val mine = list.lines().map { it.trim() }.filter { it.contains(pkg) }
+        runShell("echo '== GAME KI LAYERS' >> " + f)
+        for (l in mine) {
+            runShell("echo \"" + l + "\" >> " + f)
+        }
+        runShell("echo '== TIMESTATS (shuru ka hissa)' >> " + f)
+        runShell("dumpsys SurfaceFlinger --timestats -dump | head -c 4000 >> " + f)
+        for (l in mine.take(6)) {
+            runShell("echo '== LATENCY for:' >> " + f)
+            runShell("echo \"" + l + "\" >> " + f)
+            runShell("dumpsys SurfaceFlinger --latency \"" + l + "\" | head -c 1500 >> " + f)
+        }
     }
 
     private fun startWorker() {
@@ -134,6 +161,19 @@ class OverlayService : Service() {
                                 prevTotals = totals
                                 prevTimeNs = now
                                 prevPkg = pkg
+                            }
+
+                            if (gamePkgSeen != pkg) {
+                                gamePkgSeen = pkg
+                                gameSecs = 0
+                            }
+                            gameSecs++
+                            if (gameSecs >= 8 && dumpedPkg != pkg) {
+                                dumpedPkg = pkg
+                                writeDebug(pkg)
+                            }
+                            if (dumpedPkg == pkg) {
+                                dbg = dbg + " | file ok"
                             }
                         }
                     }
