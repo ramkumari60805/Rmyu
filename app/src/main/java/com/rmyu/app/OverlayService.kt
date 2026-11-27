@@ -32,10 +32,12 @@ class OverlayService : Service() {
     private var worker: Thread? = null
 
     private var currentPkg: String? = null
-    private var cachedLayer: String? = null
-    private var failCount = 0
+    private var tsEnabled = false
+    private var prevTotals: Map<String, Long> = emptyMap()
+    private var prevTimeNs = 0L
+    private var prevPkg: String? = null
     private var noFpsSecs = 0
-    private var debugPkg: String? = null
+    private val debugDone = HashSet<String>()
 
     private fun runShell(cmd: String): String {
         val m = Shizuku::class.java.getDeclaredMethod(
@@ -62,73 +64,40 @@ class OverlayService : Service() {
         return Regex(" ([A-Za-z0-9_.]+)/").find(a)?.groupValues?.get(1)
     }
 
-    // --list ke lipte hue text me se layer ka asli naam nikalta hai
-    private fun layerCandidates(pkg: String): List<String> {
-        val list = runShell("dumpsys SurfaceFlinger --list")
-        val re = Regex("\\{[0-9a-f]+ (.+?) \\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d\\.\\d+#(\\d+)")
-        val blast = ArrayList<String>()
-        val surf = ArrayList<String>()
-        val other = ArrayList<String>()
-        for (raw in list.lines()) {
+    // timestats se is app ki har layer ka "totalFrames" padhta hai
+    private fun readTotals(pkg: String): Map<String, Long> {
+        val out = runShell("dumpsys SurfaceFlinger --timestats -dump -maxlayers 200 | grep -E '(layerName|totalFrames) ='")
+        val result = HashMap<String, Long>()
+        var name: String? = null
+        for (raw in out.lines()) {
             val line = raw.trim()
-            if (!line.contains(pkg)) continue
-            if (line.contains("Background for")) continue
-            val m = re.find(line) ?: continue
-            val name = m.groupValues[1]
-            val id = m.groupValues[2]
-            val target = if (name.contains("SurfaceView") && name.contains("BLAST")) {
-                blast
-            } else if (name.contains("SurfaceView")) {
-                surf
-            } else {
-                other
-            }
-            target.add(name + "#" + id)
-            target.add(name)
-        }
-        return blast + surf + other
-    }
-
-    private fun latency(name: String): String {
-        return runShell("dumpsys SurfaceFlinger --latency \"" + name + "\"")
-    }
-
-    // Frame ke times se FPS nikalta hai
-    private fun calcFps(lat: String): Int? {
-        val times = ArrayList<Long>()
-        val lines = lat.trim().lines()
-        for (i in 1 until lines.size) {
-            val parts = lines[i].trim().split(Regex("\\s+"))
-            if (parts.size >= 3) {
-                val t = parts[1].toLongOrNull() ?: continue
-                if (t > 0L && t != Long.MAX_VALUE) times.add(t)
+            if (line.startsWith("layerName")) {
+                val nm = line.substringAfter("=").trim()
+                name = if (nm.contains(pkg)) nm else null
+            } else if (line.startsWith("totalFrames")) {
+                val nm = name
+                if (nm != null) {
+                    val v = line.substringAfter("=").trim().toLongOrNull()
+                    if (v != null) result[nm] = v
+                    name = null
+                }
             }
         }
-        if (times.size < 2) return null
-        times.sort()
-        val first = times.first()
-        val last = times.last()
-        val span = last - first
-        if (span <= 0L) return null
-        return if (span >= 1_000_000_000L) {
-            times.count { it > last - 1_000_000_000L }
-        } else {
-            ((times.size - 1) * 1_000_000_000L / span).toInt()
-        }
+        return result
     }
 
-    // Agar FPS nahi bana, to phone ka asli output ek file me likhta hai
+    // FPS na bane to is app ke naam ki alag file me asli output likhta hai
     private fun writeDebug(pkg: String) {
-        val f = "/sdcard/Download/rmyu_debug2.txt"
-        val ver = runShell("getprop ro.build.version.release").trim()
-        runShell("echo 'android " + ver + " | pkg " + pkg + "' > " + f)
-        val cands = layerCandidates(pkg)
-        runShell("echo 'candidates: " + cands.size + "' >> " + f)
-        for (c in cands.take(8)) {
-            runShell("echo '== NAAM:' >> " + f)
-            runShell("echo \"" + c + "\" >> " + f)
-            runShell("dumpsys SurfaceFlinger --latency \"" + c + "\" | head -c 700 >> " + f)
-        }
+        val f = "/sdcard/Download/rmyu_dbg_" + pkg + ".txt"
+        runShell("echo 'pkg " + pkg + "' > " + f)
+        runShell("echo '== layerName ki ginti' >> " + f)
+        runShell("dumpsys SurfaceFlinger --timestats -dump -maxlayers 200 | grep -c layerName >> " + f)
+        runShell("echo '== layerName lines' >> " + f)
+        runShell("dumpsys SurfaceFlinger --timestats -dump -maxlayers 200 | grep -F layerName | head -c 2500 >> " + f)
+        runShell("echo '== is app ke aas-paas ka text' >> " + f)
+        runShell("dumpsys SurfaceFlinger --timestats -dump -maxlayers 200 | grep -F -A12 '" + pkg + "' | head -c 3000 >> " + f)
+        runShell("echo '== timestats shuru' >> " + f)
+        runShell("dumpsys SurfaceFlinger --timestats -dump | head -c 600 >> " + f)
     }
 
     private fun startWorker() {
@@ -148,8 +117,6 @@ class OverlayService : Service() {
                             val p = foregroundPackage()
                             if (p != currentPkg) {
                                 currentPkg = p
-                                cachedLayer = null
-                                failCount = 0
                                 noFpsSecs = 0
                             }
                         }
@@ -159,41 +126,50 @@ class OverlayService : Service() {
                         } else if (pkg == packageName) {
                             dbg = "rmyu khula hai, game kholo"
                         } else {
-                            var fps: Int? = null
-                            val cl = cachedLayer
-                            if (cl != null) {
-                                fps = calcFps(latency(cl))
-                                if (fps == null) {
-                                    failCount++
-                                    if (failCount >= 3) {
-                                        cachedLayer = null
-                                        failCount = 0
+                            if (!tsEnabled) {
+                                runShell("dumpsys SurfaceFlinger --timestats -enable")
+                                tsEnabled = true
+                            }
+                            val totals = readTotals(pkg)
+                            val now = System.nanoTime()
+                            var gotFps = false
+                            if (totals.isEmpty()) {
+                                dbg = pkg + " | timestats me layer nahi"
+                                prevTotals = emptyMap()
+                            } else {
+                                if (prevPkg == pkg && prevTotals.isNotEmpty() && now > prevTimeNs) {
+                                    var best = -1L
+                                    for ((k, v) in totals) {
+                                        val p0 = prevTotals[k]
+                                        if (p0 != null) {
+                                            val d = v - p0
+                                            if (d > best) best = d
+                                        }
+                                    }
+                                    if (best >= 0L) {
+                                        val fps = (best * 1_000_000_000L / (now - prevTimeNs)).toInt()
+                                        fpsText = "FPS " + fps
+                                        dbg = pkg + " (" + totals.size + " layer)"
+                                        gotFps = true
+                                    } else {
+                                        dbg = pkg + " | naya layer, ruko"
                                     }
                                 } else {
-                                    failCount = 0
+                                    dbg = pkg + " | pehla sample, ruko"
                                 }
-                            } else {
-                                for (cand in layerCandidates(pkg)) {
-                                    val f = calcFps(latency(cand))
-                                    if (f != null) {
-                                        cachedLayer = cand
-                                        fps = f
-                                        break
-                                    }
-                                }
+                                prevTotals = totals
+                                prevTimeNs = now
+                                prevPkg = pkg
                             }
-                            if (fps != null) {
-                                fpsText = "FPS " + fps
-                                dbg = pkg
+                            if (gotFps) {
                                 noFpsSecs = 0
                             } else {
                                 noFpsSecs++
-                                dbg = pkg + " | frame time nahi mila"
-                                if (noFpsSecs >= 10 && debugPkg != pkg) {
-                                    debugPkg = pkg
+                                if (noFpsSecs >= 12 && !debugDone.contains(pkg)) {
+                                    debugDone.add(pkg)
                                     writeDebug(pkg)
                                 }
-                                if (debugPkg == pkg) {
+                                if (debugDone.contains(pkg)) {
                                     dbg = dbg + " | file bani"
                                 }
                             }
