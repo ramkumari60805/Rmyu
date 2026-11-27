@@ -31,7 +31,11 @@ class OverlayService : Service() {
     @Volatile private var running = false
     private var worker: Thread? = null
     private var currentPkg: String? = null
-    private var currentLayer: String? = null
+
+    private var tsEnabled = false
+    private var prevTotals: Map<String, Long> = emptyMap()
+    private var prevTimeNs = 0L
+    private var prevPkg: String? = null
 
     private fun runShell(cmd: String): String {
         val m = Shizuku::class.java.getDeclaredMethod(
@@ -58,39 +62,22 @@ class OverlayService : Service() {
         return Regex(" ([A-Za-z0-9_.]+)/").find(a)?.groupValues?.get(1)
     }
 
-    // Us app ki screen-layer dhundhta hai
-    private fun findLayer(pkg: String): String? {
-        val list = runShell("dumpsys SurfaceFlinger --list")
-        val matches = list.lines().map { it.trim() }
-            .filter { it.contains(pkg) && !it.startsWith("Background for") }
-        if (matches.isEmpty()) return null
-        return matches.firstOrNull { it.startsWith("SurfaceView") && it.contains("BLAST") }
-            ?: matches.firstOrNull { it.startsWith("SurfaceView") }
-            ?: matches[0]
-    }
-
-    // Frame ke times se FPS nikalta hai
-    private fun calcFps(lat: String): Int? {
-        val times = ArrayList<Long>()
-        val lines = lat.trim().lines()
-        for (i in 1 until lines.size) {
-            val parts = lines[i].trim().split(Regex("\\s+"))
-            if (parts.size >= 3) {
-                val t = parts[1].toLongOrNull() ?: continue
-                if (t > 0L && t != Long.MAX_VALUE) times.add(t)
+    // Us app ki har layer ke "total frames" padhta hai
+    private fun readTotals(pkg: String): Map<String, Long> {
+        val out = runShell("dumpsys SurfaceFlinger --timestats -dump | grep -A1 -F \"" + pkg + "\"")
+        val result = HashMap<String, Long>()
+        var name: String? = null
+        for (raw in out.lines()) {
+            val line = raw.trim()
+            if (line.startsWith("layerName")) {
+                name = line.substringAfter("=").trim()
+            } else if (line.startsWith("totalFrames") && name != null) {
+                val v = line.substringAfter("=").trim().toLongOrNull()
+                if (v != null) result[name] = v
+                name = null
             }
         }
-        if (times.size < 2) return null
-        times.sort()
-        val first = times.first()
-        val last = times.last()
-        val span = last - first
-        if (span <= 0L) return null
-        return if (span >= 1_000_000_000L) {
-            times.count { it > last - 1_000_000_000L }
-        } else {
-            ((times.size - 1) * 1_000_000_000L / span).toInt()
-        }
+        return result
     }
 
     private fun startWorker() {
@@ -107,11 +94,7 @@ class OverlayService : Service() {
                         dbg = "Shizuku permission nahi"
                     } else {
                         if (n % 3 == 0 || currentPkg == null) {
-                            val p = foregroundPackage()
-                            if (p != currentPkg) {
-                                currentPkg = p
-                                currentLayer = null
-                            }
+                            currentPkg = foregroundPackage()
                         }
                         val pkg = currentPkg
                         if (pkg == null) {
@@ -119,20 +102,38 @@ class OverlayService : Service() {
                         } else if (pkg == packageName) {
                             dbg = "rmyu khula hai, game kholo"
                         } else {
-                            if (currentLayer == null) currentLayer = findLayer(pkg)
-                            val layer = currentLayer
-                            if (layer == null) {
-                                dbg = pkg + " | layer nahi mili"
+                            if (!tsEnabled) {
+                                runShell("dumpsys SurfaceFlinger --timestats -enable")
+                                tsEnabled = true
+                            }
+                            val totals = readTotals(pkg)
+                            val now = System.nanoTime()
+                            if (totals.isEmpty()) {
+                                dbg = pkg + " | timestats me layer nahi"
+                                prevTotals = emptyMap()
                             } else {
-                                val lat = runShell("dumpsys SurfaceFlinger --latency \"" + layer + "\"")
-                                val fps = calcFps(lat)
-                                if (fps == null) {
-                                    dbg = pkg + " | latency khali (" + lat.lines().size + " line)"
-                                    currentLayer = null
+                                if (prevPkg == pkg && prevTotals.isNotEmpty() && now > prevTimeNs) {
+                                    var best = -1L
+                                    for ((k, v) in totals) {
+                                        val p = prevTotals[k]
+                                        if (p != null) {
+                                            val d = v - p
+                                            if (d > best) best = d
+                                        }
+                                    }
+                                    if (best >= 0L) {
+                                        val fps = (best * 1_000_000_000L / (now - prevTimeNs)).toInt()
+                                        fpsText = "FPS " + fps
+                                        dbg = pkg + " (" + totals.size + " layer)"
+                                    } else {
+                                        dbg = pkg + " | naya layer, ruko"
+                                    }
                                 } else {
-                                    fpsText = "FPS " + fps
-                                    dbg = pkg
+                                    dbg = pkg + " | pehla sample, ruko"
                                 }
+                                prevTotals = totals
+                                prevTimeNs = now
+                                prevPkg = pkg
                             }
                         }
                     }
